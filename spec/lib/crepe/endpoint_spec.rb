@@ -4,7 +4,7 @@ require 'rack/mock'
 require_relative '../../../lib/crepe/endpoint'
 
 describe Crepe::Endpoint do
-  let(:endpoint) { described_class.new config, &handler }
+  let(:endpoint) { described_class.to_app config, &handler }
   let(:config) { {} }
   let(:handler) { proc { 'Hello, world!' } }
   let(:response) {
@@ -14,8 +14,8 @@ describe Crepe::Endpoint do
   let(:env) { Rack::MockRequest.env_for }
 
   describe '#format' do
-    subject { endpoint.format }
-    before { endpoint.instance_variable_set :@env, env }
+    let(:instance) { endpoint.new env }
+    subject { instance.send :format }
 
     context 'with formats configured' do
       let(:config) { { formats: [:xml, :json] } }

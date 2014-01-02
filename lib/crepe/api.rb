@@ -4,12 +4,16 @@ module Crepe
   # The API class provides a DSL to build a collection of endpoints.
   class API
 
+    # Used to indicate that a block should be wrapped by an Endpoint
+    class Handler < Struct.new :block
+    end
+
     METHODS = %w[GET POST PUT PATCH DELETE]
 
     SEPARATORS = %w[ / . ? ]
 
     @config = Config.new(
-      endpoint: Endpoint.default_config,
+      endpoint: Endpoint.config,
       helper: Module.new,
       middleware: [
         Middleware::JSCallback,
@@ -99,9 +103,8 @@ module Crepe
       # @todo
       #   Examples of the other options.
       def route method, path = '/', **options, &block
-        block ||= proc { head }
-        endpoint = Endpoint.new(&block)
-        mount endpoint, options.merge(at: path, method: method, anchor: true)
+        handler = Handler.new block || proc { head }
+        mount handler, options.merge(at: path, method: method, anchor: true)
       end
 
       # Defines a GET-based route.
@@ -602,10 +605,9 @@ module Crepe
           routes.map do |app, conditions, defaults, config|
             if app.is_a?(Class) && app.ancestors.include?(API)
               app = Class.new(app).to_app exclude: exclude
-            elsif app.is_a? Endpoint
-              app = app.dup
-              app.configure! config.to_h[:endpoint]
-              config.all(:helper).each { |helper| app.extend helper }
+            elsif app.is_a? Handler
+              app = Endpoint.to_app config.to_h[:endpoint], &app.block
+              config.all(:helper).each { |helper| app.send :include, helper }
             end
 
             [app, conditions, defaults]

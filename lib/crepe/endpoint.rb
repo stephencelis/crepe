@@ -9,54 +9,65 @@ module Crepe
     class DoubleRenderError < StandardError
     end
 
+    @config = {
+      callbacks: {},
+      formats: [:json],
+      parsers: Hash.new(Parser::Simple),
+      renderers: Hash.new(Renderer::Simple),
+      rescuers: {
+        Params::Missing => -> e { error! :bad_request, e.message, e.data },
+        Params::Invalid => -> e { error! :bad_request, e.message, e.data }
+      }
+    }
+
     class << self
 
-      def default_config
-        @default_config ||= {
-          callbacks: {},
-          formats: [:json],
-          parsers: Hash.new(Parser::Simple),
-          renderers: Hash.new(Renderer::Simple),
-          rescuers: {
-            Params::Missing => -> e { error! :bad_request, e.message, e.data },
-            Params::Invalid => -> e { error! :bad_request, e.message, e.data }
-          }
-        }
+      # @return [Hash] Endpoint configuration
+      attr_reader :config
+
+      # Rack call interface.
+      #
+      # @return [[Numeric, Hash, #each]]
+      def call env
+        new(env).run_handler
       end
 
-    end
+      def handle &handler
+        define_method :handler, &handler
+      end
 
-    # @return [Hash] Endpoint configuration
-    attr_reader :config
+      def to_app config = {}, &block
+        app = Class.new(self) { handle(&block) }
+        app.config = Util.deep_merge app.config, config
+        Crepe.const_set "Endpoint_#{app.object_id}", app
+      end
+
+      protected
+
+        attr_writer :config
+
+      private
+
+        def inherited subclass
+          subclass.config = Util.deep_dup config
+        end
+
+    end
 
     # @return [Hash] The Rack env
     attr_reader :env
 
-    alias dup clone
-
-    def initialize config = {}, &handler
-      configure! config
-      define_singleton_method :_run_handler, &handler
+    def initialize env
+      @env = env
     end
+
+    # @return [Hash]
+    # @see Crepe::Endpoint.config
+    delegate :config, to: :class
 
     # @return [Logger]
     # @see Crepe.logger
     delegate :logger, to: :Crepe
-
-    def configure! new_config
-      @config ||= self.class.default_config
-      @config = Util.deep_merge config, new_config
-      if config[:formats].empty?
-        raise ArgumentError, 'wrong number of formats (at least 1)'
-      end
-    end
-
-    # Rack call interface.
-    #
-    # @return [[Numeric, Hash, #each]]
-    def call env
-      clone.call! env
-    end
 
     # An object representing the current request.
     #
@@ -219,28 +230,28 @@ module Crepe
       response.cache_control.replace no_cache: true
     end
 
-    protected
-
-      def call! env
-        @env = env
-
-        halt = catch :halt do
-          begin
-            not_acceptable! unless format
-            parse request.body if request.body.present?
-            run_callbacks :before
-            payload = _run_handler
-            render payload if payload && response.body.nil?
-            nil
-          rescue => e
-            handle_exception e
-          end
+    # Parses the request, calls the run handler, renders a response.
+    # Exceptions raised during handling are rescued and handled.
+    #
+    # @return [[Numeric, Hash, #each]]
+    def run_handler
+      halt = catch :halt do
+        begin
+          not_acceptable! unless format
+          parse request.body if request.body.present?
+          run_callbacks :before
+          payload = handler
+          render payload if payload && response.body.nil?
+          nil
+        rescue => e
+          handle_exception e
         end
-        render halt if halt
-        run_callbacks :after
-
-        response.finish
       end
+      render halt if halt
+      run_callbacks :after
+
+      response.finish
+    end
 
     private
 
